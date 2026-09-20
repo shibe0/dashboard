@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>しべの当番表</title>
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#121211;
+    color:#ECE6D8;font:15px/1.7 "Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",sans-serif;
+    padding:24px 16px}
+  .box{width:100%;max-width:340px}
+  h1{font-size:17px;font-weight:900;letter-spacing:.1em;color:#EBD28E;margin:0 0 6px}
+  p{font-size:12.5px;color:#A79E8E;margin:0 0 18px}
+  label{display:block;font-size:12px;color:#A79E8E;margin-bottom:6px}
+  input{width:100%;font:inherit;font-size:16px;color:#ECE6D8;background:#1B1B19;
+    border:1px solid #302D28;border-radius:6px;padding:11px 12px;box-sizing:border-box}
+  input:focus{outline:2px solid #C9A45C;outline-offset:1px}
+  button{width:100%;font:inherit;font-size:15px;font-weight:700;color:#121211;background:#C9A45C;
+    border:0;border-radius:6px;padding:12px;margin-top:12px;cursor:pointer;min-height:46px}
+  button[disabled]{opacity:.55}
+  .msg{font-size:12.5px;margin-top:10px;min-height:1.7em;color:#A79E8E}
+  .msg.bad{color:#E08A84}
+</style></head><body>
+<div class="box">
+  <h1>しべの当番表</h1>
+  <p>合言葉を1回だけ入れてください。次からはこの端末が覚えます。</p>
+  <form id="f" autocomplete="off">
+    <label for="p">合言葉</label>
+    <input id="p" type="password" inputmode="text" autocapitalize="off"
+           autocorrect="off" spellcheck="false">
+    <button type="submit" id="b">開く</button>
+    <div class="msg" id="e" role="status" aria-live="polite"></div>
+  </form>
+</div>
+<script>
+const KEY = 'shibe-dashboard-pass';
+const E = document.getElementById('e'), B = document.getElementById('b');
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const 言う = (t, わるい) => { E.textContent = t; E.className = 'msg' + (わるい ? ' bad' : ''); };
+
+async function 鍵ふたつ(pass, salt, iter) {
+  const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass),
+    'PBKDF2', false, ['deriveBits']);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits(
+    {name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256'}, km, 512));
+  return {
+    enc: await crypto.subtle.importKey('raw', bits.slice(0, 32),
+      {name: 'AES-CBC'}, false, ['decrypt']),
+    mac: await crypto.subtle.importKey('raw', bits.slice(32, 64),
+      {name: 'HMAC', hash: 'SHA-256'}, false, ['verify'])
+  };
+}
+
+async function 開く(pass, 黙って) {
+  if (!黙って) { 言う('開いています…'); B.disabled = true; }
+  let d;
+  try { d = await (await fetch('d.json', {cache: 'no-store'})).json(); }
+  catch (err) { 言う('中身を取ってこられませんでした。', true); B.disabled = false; return false; }
+  try {
+    const iv = b64(d.iv), ct = b64(d.ct);
+    const k = await 鍵ふたつ(pass, b64(d.salt), d.iter);
+    const 封 = new Uint8Array(iv.length + ct.length);
+    封.set(iv); 封.set(ct, iv.length);
+    if (!await crypto.subtle.verify('HMAC', k.mac, b64(d.mac), 封)) throw new Error('mac');
+    const plain = await crypto.subtle.decrypt({name: 'AES-CBC', iv}, k.enc, ct);
+    const html = new TextDecoder().decode(plain);
+    try { localStorage.setItem(KEY, pass); } catch (e) {}
+    document.open(); document.write(html); document.close();
+    return true;
+  } catch (err) {
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    if (!黙って) { 言う('合言葉が違います。', true); B.disabled = false; }
+    return false;
+  }
+}
+
+document.getElementById('f').addEventListener('submit', ev => {
+  ev.preventDefault();
+  const v = document.getElementById('p').value;
+  if (v) 開く(v, false);
+});
+(async () => {
+  let saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  if (saved && await 開く(saved, true)) return;
+  document.getElementById('p').focus();
+})();
+</script>
+</body></html>
